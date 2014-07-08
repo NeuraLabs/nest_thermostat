@@ -5,6 +5,13 @@ require 'uri'
 
 module NestThermostat
   class Nest
+
+    module Exceptions
+      class InvalidLoginCredentials < StandardError; end
+      class NestLoginError < StandardError; end
+      class TooManyRequests < StandardError; end
+    end
+
     attr_accessor :email, :password, :login_url, :user_agent, :auth,
       :temperature_scale, :login, :token, :user_id, :transport_url,
       :transport_host, :structure_id, :device_id, :headers
@@ -126,8 +133,20 @@ module NestThermostat
                         headers: { 'User-Agent' => self.user_agent }
                       )
 
-      self.auth ||= JSON.parse(login_request.body) rescue nil
-      raise 'Invalid login credentials' if self.auth.has_key?('error') && self.auth['error'] == "access_denied"
+      case login_request.code
+      when 200..202
+        self.auth ||= JSON.parse(login_request.body) rescue nil
+      when 429
+        raise NestThermostat::Nest::Exceptions::TooManyRequests, login_request.body
+      when 500
+        if self.auth.respond_to?(:has_key?) && self.auth.has_key?('error') && self.auth['error'] == "access_denied"
+          raise NestThermostat::Nest::Exceptions::InvalidLoginCredentials, self.auth["error_description"]
+        else
+          raise NestThermostat::Nest::Exceptions::NestLoginError, login_request.body
+        end 
+      else
+        raise NestThermostat::Nest::Exceptions::NestLoginError, "Unknown Error #{login_request.code}"
+      end
     end
 
     def convert_temp_for_get(degrees)
